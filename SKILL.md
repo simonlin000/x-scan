@@ -2,12 +2,13 @@
 name: x-scan
 description: >
   Scan X/Twitter feed for AI-related content and save relevant tweets to a knowledge vault.
+  Supports both single scan and scheduled looping with automatic deduplication.
   Automatically connects to a running Chrome browser via CDP, navigates to X.com,
   scrolls to load content, extracts tweets with metadata (handle, time, text, stats),
   filters by keywords, and saves as Markdown files.
   Use when the user wants to scan X feed, monitor X/Twitter for AI content,
-  auto-collect tweets, build a knowledge base from social media, or mentions
-  xcolab, x-scan, X feed scanner, or Twitter monitoring.
+  auto-collect tweets, build a knowledge base from social media, run scheduled
+  Twitter monitoring, or mentions xcolab, x-scan, X feed scanner, or Twitter monitoring.
 ---
 
 # X Feed Scanner (xcolab)
@@ -20,6 +21,10 @@ This skill connects to a running Chrome browser via Chrome DevTools Protocol (CD
 creates a new page to visit X.com, scrolls to load more content, extracts tweet data,
 filters by configurable keywords, and saves matching tweets as Markdown files in a
 knowledge vault for later review or AI processing.
+
+**Two modes:**
+- **Single scan** — Run once, save results
+- **Scheduled scan** — Loop every N minutes with automatic deduplication
 
 ## Prerequisites
 
@@ -41,41 +46,43 @@ Set these environment variables before running:
 
 ## Workflow
 
-### Step 1: Verify Chrome Connection
-
-Check if Chrome is accessible on the configured CDP port:
+### Single Scan Mode
 
 ```bash
-curl -s http://127.0.0.1:$XCOLAB_CDP_PORT/json/version | jq .
+python3 scripts/x-scan.py
 ```
 
-Expected: JSON with `webSocketDebuggerUrl` field.
-
-### Step 2: Run the Scanner
-
-Execute the bundled script:
+### Scheduled Scan Mode
 
 ```bash
-python3 ~/.cola/skills/x-scan/scripts/x-scan.py
+# Every 30 minutes, infinite loop
+python3 scripts/x-scan.py --schedule 30
+
+# Every 60 minutes, max 5 runs
+python3 scripts/x-scan.py --schedule 60 --max-runs 5
 ```
 
-The script will:
-1. Connect to Chrome via CDP
-2. Create a new page and navigate to `https://x.com/home`
-3. Verify login status (exit if not logged in)
-4. Scroll down N times to load more tweets
-5. Extract tweet data (handle, timestamp, text, engagement stats)
-6. Filter tweets by keywords and ignore-list
-7. Save matching tweets as a Markdown file in the vault
+**Features in scheduled mode:**
+- Loads all existing `auto-scan-*.md` files for deduplication
+- Skips tweets already saved in previous runs
+- Appends new tweets to today's file
+- Shows next scan time and progress
 
-### Step 3: Review Output
+### Step-by-Step
 
-Output file: `{VAULT}/auto-scan-{YYYY-MM-DD}.md`
+1. **Verify Chrome Connection**
+   ```bash
+   curl -s http://127.0.0.1:$XCOLAB_CDP_PORT/json/version | jq .
+   ```
 
-Contains:
-- YAML frontmatter with date, type, source, tags
-- Summary of scan results
-- List of relevant tweets with handles, dates, text, and engagement stats
+2. **Run the Scanner**
+   ```bash
+   python3 scripts/x-scan.py
+   ```
+
+3. **Review Output**
+   - Output file: `{VAULT}/auto-scan-{YYYY-MM-DD}.md`
+   - Contains YAML frontmatter, summary, and tweet list
 
 ## Keyword Filtering
 
@@ -88,9 +95,13 @@ AI, LLM, GPT, Claude, Agent, automation, prompt engineering, machine learning, o
 ### Ignore List
 Noise terms filtered out: 高考, 高考志愿, 房子, 房价, 股市, 彩票, 炒股
 
-## Customization
+## Command Line Options
 
-To modify keywords or ignore list, edit the script directly or set environment variables before running.
+| Option | Description |
+|--------|-------------|
+| `--schedule MINUTES` | Run in scheduled mode every N minutes |
+| `--max-runs N` | Maximum number of scans (requires `--schedule`) |
+| `--once` | Force single scan mode (default) |
 
 ## Troubleshooting
 
