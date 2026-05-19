@@ -45,11 +45,14 @@ KEYWORDS_EN = [
 # 用哪套关键词？'zh', 'en', 'both'
 KEYWORD_MODE = os.environ.get("XCOLAB_KEYWORD_MODE", "zh")
 
+# 滚动次数（环境变量可覆盖）
+SCROLL_COUNT = int(os.environ.get("XCOLAB_SCROLL", "15"))
+
 # 忽略词（噪音过滤）
 IGNORE = ['高考', '高考志愿', '房子', '房价', '股市', '彩票', '炒股']
 
-# 每次扫描滚动几次加载更多内容
-SCROLL_COUNT = int(os.environ.get("XCOLAB_SCROLL", "4"))
+# 每次扫描滚动几次加载更多内容（已在上文定义，此处删除重复）
+# SCROLL_COUNT = int(os.environ.get("XCOLAB_SCROLL", "4"))
 
 # ============================================================
 # 以下不需要改
@@ -61,7 +64,7 @@ EXTRACT_JS = """
     const posts = [];
     const articles = document.querySelectorAll('article[role="article"]');
     articles.forEach((article, i) => {
-        if (i > 40) return;
+        // 移除40条限制，提取所有可见推文
         // 账号名
         const allLinks = article.querySelectorAll('a[role="link"]');
         let handle = '';
@@ -266,15 +269,16 @@ def scan_once():
             browser = p.chromium.connect_over_cdp(browser_ws)
             ctx = browser.contexts[0]
             
-            # 创建新页面访问X
+            # 始终创建新页面访问x.com/home，确保检测准确
             print("[打开] x.com...")
             x_tab = ctx.new_page()
-            x_tab.goto("https://x.com/home", wait_until="networkidle", timeout=30000)
+            x_tab.goto("https://x.com/home", wait_until="domcontentloaded", timeout=60000)
             
             print(f"[页面] {x_tab.url}")
             print(f"[标题] {x_tab.title()}")
             
-            # 检查登录状态
+            # 检查登录状态 - 等待页面完全加载后再检测
+            x_tab.wait_for_timeout(3000)
             login_btn = x_tab.query_selector('a[href="/login"]')
             if login_btn:
                 print("[错误] X 未登录，请先在Chrome中登录X.com")
@@ -286,11 +290,12 @@ def scan_once():
             # 等待页面加载
             x_tab.wait_for_timeout(2000)
             
-            # 滚动加载更多
+            # 滚动加载更多，多次滚动后提取
             for i in range(SCROLL_COUNT):
-                x_tab.evaluate("window.scrollBy(0, 800)")
-                x_tab.wait_for_timeout(800)
+                x_tab.evaluate("window.scrollBy(0, 1200)")
+                x_tab.wait_for_timeout(1500)
             
+            # 滚动完成后再提取，获取更多推文
             posts = x_tab.evaluate(EXTRACT_JS)
             
             # 关闭页面
