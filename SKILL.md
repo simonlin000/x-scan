@@ -21,11 +21,12 @@ When installing or preparing this skill for someone else, the agent should do
 these steps automatically:
 
 1. Check that `python3` and Google Chrome or Chromium are available.
-2. Run `python3 -m pip install -r requirements.txt` if `websocket-client` is not
-   importable. Use the same `python3` that will run the scanner.
-3. Run the offline tests with
-   `python3 -m unittest discover -s tests -v`.
-4. Run `python3 scripts/xscan.py --help` as the smoke test.
+2. If the host Python is externally managed or cannot install packages, create a
+   `.venv` inside the skill directory with `python3 -m venv .venv`.
+3. Use one interpreter consistently. Install with
+   `<python> -m pip install -r requirements.txt`, test with
+   `<python> -m unittest discover -s tests -v`, and smoke-test with
+   `<python> scripts/xscan.py --help`.
 5. On the first real scan, the only expected manual step is logging into X in
    the dedicated browser profile. Never request or copy the user's main Chrome
    profile or cookies.
@@ -75,6 +76,7 @@ python3 "$SCRIPT" --mode search --query "OpenAI" --summary-only
 | `XCOLAB_CHROME_PROFILE` | `~/.cola/chrome-debug-profile` | Dedicated browser profile |
 | `XCOLAB_CHROME_PATH` | Auto-detected | Chrome or Chromium executable |
 | `XSCAN_OUTPUT_DIR` | `~/Documents/X资源收藏` | Markdown output directory |
+| `XCOLAB_ALLOW_UNVERIFIED_CDP` | `0` | Explicit opt-in for CDP instances whose Profile cannot be verified |
 
 CLI flags override the output directory. The scanner creates it when needed.
 
@@ -126,8 +128,8 @@ open the dedicated browser profile, log into `x.com`, and run the scan again.
 | Output in the wrong place | Set `XSCAN_OUTPUT_DIR` or pass `--output` |
 
 The scanner exits non-zero for invalid arguments, browser/CDP failures, login
-failures, and page extraction failures. A genuine empty result is reported
-separately from an execution failure.
+failures, and any page extraction failure. It refuses to save partial scan results.
+A genuine empty result is reported separately from an execution failure.
 
 ## Scheduling
 
@@ -137,7 +139,12 @@ This directory does not claim to install or configure cron jobs by itself.
 
 ## Safety Rules
 
-- Never touch the user's main Chrome profile.
+- Never touch the user's main Chrome profile. The scanner verifies the CDP
+  process command line before reusing an existing port.
+- Do not set `XCOLAB_CHROME_PROFILE` to the main Chrome Profile.
+- `XCOLAB_ALLOW_UNVERIFIED_CDP=1` is an explicit escape hatch for platforms where
+  process ownership cannot be inspected; use it only when the port is known to
+  belong to the dedicated browser.
 - Never use `pkill Chrome`. If a dedicated instance must be stopped, target only
   the process bound to the configured CDP port.
 - Do not request or export X cookies, passwords, or session data.

@@ -48,6 +48,7 @@ def env_int(name, default, minimum=None, maximum=None):
 
 
 CDP_PORT = env_int("XCOLAB_CDP_PORT", 19542, minimum=1, maximum=65535)
+ALLOW_UNVERIFIED_CDP = os.environ.get("XCOLAB_ALLOW_UNVERIFIED_CDP", "0").lower() in {"1", "true", "yes"}
 CHROME_PROFILE = Path(os.environ.get(
     "XCOLAB_CHROME_PROFILE",
     str(Path.home() / ".cola" / "chrome-debug-profile"),
@@ -58,6 +59,7 @@ DEFAULT_OUTPUT = Path(os.environ.get(
 )).expanduser()
 DEFAULT_ROUNDS = 5
 SCROLL_PAUSE = 2.0  # 每次滚动后等待秒数
+OWNER_MARKER = CHROME_PROFILE / ".xscan-cdp-owner.json"
 
 
 def find_chrome():
@@ -96,18 +98,100 @@ IGNORE = ['高考', '高考志愿', '房子', '房价', '股市', '彩票', '炒
 # Cola Chrome 生命周期
 # ============================================================
 
-def chrome_alive():
-    """检测 CDP 端口是否有活着的 Chrome"""
+def raw_cdp_info():
+    """读取本机 CDP 信息；只绑定 localhost。"""
     try:
         req = urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/version", timeout=3)
         data = json.loads(req.read())
-        return data.get("webSocketDebuggerUrl") is not None
+        return data if data.get("webSocketDebuggerUrl") else None
     except Exception:
+        return None
+
+
+def listening_pid():
+    """找出占用 CDP 端口的进程，无法查询时返回 None。"""
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{CDP_PORT}", "-sTCP:LISTEN", "-Fp"],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("p") and line[1:].isdigit():
+                return line[1:]
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def process_command(pid):
+    if not pid:
+        return ""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+        return result.stdout.strip()
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def profile_is_suspicious(profile):
+    """拒绝明显指向用户主 Chrome Profile 的路径。"""
+    normalized = str(profile.expanduser().resolve()).lower()
+    markers = (
+        "/library/application support/google/chrome",
+        "/appdata/local/google/chrome/user data",
+        "/.config/google-chrome",
+        "/.config/chromium",
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def marker_owns_process():
+    """在没有 lsof 的平台上，用本 Skill 启动时留下的 PID 标记做回退校验。"""
+    try:
+        marker = json.loads(OWNER_MARKER.read_text(encoding="utf-8"))
+        pid = int(marker.get("pid", 0))
+        profile = Path(marker.get("profile", "")).expanduser().resolve()
+        if profile != CHROME_PROFILE.expanduser().resolve() or pid <= 0:
+            return False
+        os.kill(pid, 0)
+        command = process_command(str(pid))
+        return not command or str(CHROME_PROFILE.expanduser().resolve()) in command
+    except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
         return False
+
+
+def cdp_owner_state():
+    """返回 down、owned、unverified 或 foreign，避免误控其他 CDP 浏览器。"""
+    if not raw_cdp_info():
+        return "down"
+    pid = listening_pid()
+    command = process_command(pid)
+    expected = str(CHROME_PROFILE.expanduser().resolve())
+    if f"--user-data-dir={expected}" in command or f'--user-data-dir="{expected}"' in command:
+        return "owned"
+    if marker_owns_process():
+        return "owned"
+    if ALLOW_UNVERIFIED_CDP:
+        return "unverified"
+    return "foreign"
+
+
+def chrome_alive():
+    """只把已验证归属的 CDP 浏览器视为可用。"""
+    return cdp_owner_state() in {"owned", "unverified"}
 
 
 def launch_chrome():
     """拉起 Cola Chrome 独立实例，绝不碰主 Chrome。"""
+    if profile_is_suspicious(CHROME_PROFILE) and not ALLOW_UNVERIFIED_CDP:
+        print("[错误] XCOLAB_CHROME_PROFILE 指向疑似主 Chrome Profile，已拒绝启动。请使用独立目录。")
+        return False
+    if raw_cdp_info():
+        print("[错误] CDP 端口已被其他浏览器占用，未连接以避免误控。请更换 XCOLAB_CDP_PORT。")
+        return False
     chrome_app = find_chrome()
     if not chrome_app:
         print("[错误] 找不到 Google Chrome 或 Chromium。请安装浏览器，或设置 XCOLAB_CHROME_PATH。")
@@ -123,7 +207,12 @@ def launch_chrome():
         "--no-default-browser-check",
     ]
     try:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        OWNER_MARKER.write_text(json.dumps({
+            "pid": process.pid,
+            "port": CDP_PORT,
+            "profile": str(CHROME_PROFILE),
+        }), encoding="utf-8")
     except OSError as exc:
         print(f"[错误] 启动 Chrome 失败: {exc}")
         return False
@@ -138,9 +227,18 @@ def launch_chrome():
 
 
 def ensure_chrome():
-    """确保 Cola Chrome 可用"""
-    if chrome_alive():
+    """确保 Cola Chrome 可用，并拒绝未验证的浏览器归属。"""
+    if profile_is_suspicious(CHROME_PROFILE) and not ALLOW_UNVERIFIED_CDP:
+        print("[错误] XCOLAB_CHROME_PROFILE 指向疑似主 Chrome Profile，已拒绝操作。请使用独立目录。")
+        return False
+    state = cdp_owner_state()
+    if state in {"owned", "unverified"}:
+        if state == "unverified":
+            print("[警告] CDP 归属无法验证，已按 XCOLAB_ALLOW_UNVERIFIED_CDP=1 继续。")
         return True
+    if state == "foreign":
+        print("[错误] CDP 端口已被其他浏览器占用，未连接以避免误控。请更换 XCOLAB_CDP_PORT。")
+        return False
     return launch_chrome()
 
 
@@ -274,31 +372,32 @@ EXTRACT_JS = """
             const textEl = article.querySelector('[data-testid="tweetText"]');
             const text = textEl ? textEl.innerText.trim() : '';
 
-            // 结构化互动数据 — 从 role="group" 的组合标签解析
+            // 结构化互动数据，兼容中文和英文界面。
             let stats = { replies: 0, retweets: 0, likes: 0, views: 0, bookmarks: 0 };
             const groupEl = article.querySelector('[role="group"][aria-label]');
-            if (groupEl) {
-                const gl = groupEl.getAttribute('aria-label') || '';
-                // 格式: "48 回复、198 次转帖、978 喜欢、2037 书签、250272 次观看"
-                const rm = gl.match(/([\\d,.]+[KMB]?)\\s*回复/); if (rm) stats.replies = rm[1];
-                const rtm = gl.match(/([\\d,.]+[KMB]?)\\s*次?转帖/); if (rtm) stats.retweets = rtm[1];
-                const lm = gl.match(/([\\d,.]+[KMB]?)\\s*喜欢/); if (lm) stats.likes = lm[1];
-                const bm = gl.match(/([\\d,.]+[KMB]?)\\s*书签/); if (bm) stats.bookmarks = bm[1];
-                const vm = gl.match(/([\\d,.]+[KMB]?)\\s*次?(?:观看|查看)/); if (vm) stats.views = vm[1];
-            } else {
-                // 回退：逐个元素匹配（英文界面）
-                const statEls = article.querySelectorAll('[aria-label]');
-                for (const el of statEls) {
-                    const label = el.getAttribute('aria-label') || '';
-                    const numMatch = label.match(/([\\d,.]+[KMB]?)/);
-                    if (!numMatch) continue;
-                    const num = numMatch[1];
-                    if (label.includes('repl')) stats.replies = num;
-                    else if (label.includes('repost')) stats.retweets = num;
-                    else if (label.includes('like')) stats.likes = num;
-                    else if (label.includes('view')) stats.views = num;
-                    else if (label.includes('bookmark')) stats.bookmarks = num;
-                }
+            const parseStat = (label, pattern, key) => {
+                const match = label.match(pattern);
+                if (match) stats[key] = match[1];
+            };
+            const groupLabel = groupEl ? groupEl.getAttribute('aria-label') || '' : '';
+            parseStat(groupLabel, /([\\d,.]+[KMB]?)\\s*(?:回复|repl(?:y|ies))/i, 'replies');
+            parseStat(groupLabel, /([\\d,.]+[KMB]?)\\s*(?:次?转帖|转发|repost(?:s)?|retweet(?:s)?)/i, 'retweets');
+            parseStat(groupLabel, /([\\d,.]+[KMB]?)\\s*(?:喜欢|like(?:s)?)/i, 'likes');
+            parseStat(groupLabel, /([\\d,.]+[KMB]?)\\s*(?:书签|bookmark(?:s)?)/i, 'bookmarks');
+            parseStat(groupLabel, /([\\d,.]+[KMB]?)\\s*(?:次?(?:观看|查看)|view(?:s)?)/i, 'views');
+
+            // 某些 X 版本把数字拆在独立按钮上，补齐组合标签没有的字段。
+            const statEls = article.querySelectorAll('[aria-label]');
+            for (const el of statEls) {
+                const label = el.getAttribute('aria-label') || '';
+                const numMatch = label.match(/([\\d,.]+[KMB]?)/);
+                if (!numMatch) continue;
+                const num = numMatch[1];
+                if (!stats.replies && /repl|回复/i.test(label)) stats.replies = num;
+                else if (!stats.retweets && /repost|retweet|转帖|转发/i.test(label)) stats.retweets = num;
+                else if (!stats.likes && /like|喜欢/i.test(label)) stats.likes = num;
+                else if (!stats.views && /view|观看|查看/i.test(label)) stats.views = num;
+                else if (!stats.bookmarks && /bookmark|书签/i.test(label)) stats.bookmarks = num;
             }
 
             // 媒体链接
@@ -407,6 +506,7 @@ def scan(session, mode, query=None, latest=False, rounds=DEFAULT_ROUNDS):
         raise ValueError("rounds 必须 >= 1")
     all_posts = []
     seen_keys = set()
+    extraction_failures = 0
 
     # 导航
     if mode == "search":
@@ -436,25 +536,31 @@ def scan(session, mode, query=None, latest=False, rounds=DEFAULT_ROUNDS):
 
         # 提取当前可见推文
         raw = session.evaluate(EXTRACT_JS)
-        if raw:
-            try:
-                posts = json.loads(raw) if isinstance(raw, str) else raw
-                new_count = 0
-                for p in posts:
-                    key = post_key(p)
-                    if key not in seen_keys:
-                        seen_keys.add(key)
-                        all_posts.append(p)
-                        new_count += 1
-                print(f"    本轮新增 {new_count} 条 (累计 {len(all_posts)})")
-            except (json.JSONDecodeError, TypeError) as e:
-                print(f"    [警告] 解析失败: {e}")
+        try:
+            if raw is None or raw == "":
+                raise ValueError("CDP 未返回提取结果")
+            posts = json.loads(raw) if isinstance(raw, str) else raw
+            if not isinstance(posts, list):
+                raise TypeError("提取结果不是列表")
+            new_count = 0
+            for p in posts:
+                key = post_key(p)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    all_posts.append(p)
+                    new_count += 1
+            print(f"    本轮新增 {new_count} 条 (累计 {len(all_posts)})")
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            extraction_failures += 1
+            print(f"    [错误] 第 {r} 轮提取失败: {e}", file=sys.stderr)
 
         # 滚动
         if r < rounds:
             session.evaluate("window.scrollBy(0, 1500)")
             time.sleep(SCROLL_PAUSE)
 
+    if extraction_failures:
+        raise RuntimeError(f"有 {extraction_failures}/{rounds} 轮提取失败，已拒绝保存不完整结果。")
     print(f"[完成] 共抓取 {len(all_posts)} 条独立推文")
     return all_posts
 
@@ -523,8 +629,8 @@ def safe_tweet_url(value):
 def safe_media_url(value):
     parsed = urlparse(str(value or ""))
     host = parsed.netloc.lower()
-    if parsed.scheme == "https" and (host == "pbs.twimg.com" or host.endswith(".pbs.twimg.com")):
-        return str(value).replace("\n", "")
+    if parsed.scheme == "https" and (host == "pbs.twimg.com" or host.endswith(".pbs.twimg.com")) and parsed.path.startswith("/media/"):
+        return quote(str(value).replace("\n", ""), safe=":/?&=%,.-_~")
     return ""
 
 

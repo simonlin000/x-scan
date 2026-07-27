@@ -21,20 +21,27 @@
 ```bash
 git clone https://github.com/simonlin000/x-scan.git
 cd x-scan
-python3 -m pip install -r requirements.txt
-python3 -m unittest discover -s tests -v
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m unittest discover -s tests -v
 ```
+
+Windows PowerShell can use `.venv\\Scripts\\python.exe` instead of
+`.venv/bin/python`. If the host Python already permits package installation, an
+Agent may reuse it, but the same interpreter must run installation, tests and
+scans.
 
 很多人会让 Agent 帮忙安装 Skill。Agent 可以直接执行上面的依赖安装、测试和 smoke test。首次真正扫描时，只需要在专用浏览器 Profile 中登录一次 X，不要复制主 Chrome 的 Cookie 或会话文件。
 
 ## 使用
 
 ```bash
-python3 scripts/xscan.py --mode feed
-python3 scripts/xscan.py --mode search --query "Claude Code"
-python3 scripts/xscan.py --mode search --query "Claude Code" --latest
-python3 scripts/xscan.py --mode feed --rounds 3
-python3 scripts/xscan.py --mode search --query "OpenAI" --summary-only
+PYTHON=.venv/bin/python
+$PYTHON scripts/xscan.py --mode feed
+$PYTHON scripts/xscan.py --mode search --query "Claude Code"
+$PYTHON scripts/xscan.py --mode search --query "Claude Code" --latest
+$PYTHON scripts/xscan.py --mode feed --rounds 3
+$PYTHON scripts/xscan.py --mode search --query "OpenAI" --summary-only
 ```
 
 Latest 搜索使用 X 的 `f=live` 筛选参数。
@@ -47,6 +54,7 @@ Latest 搜索使用 X 的 `f=live` 筛选参数。
 | `XCOLAB_CHROME_PROFILE` | `~/.cola/chrome-debug-profile` | 专用浏览器 Profile |
 | `XCOLAB_CHROME_PATH` | 自动探测 | Chrome 或 Chromium 可执行文件 |
 | `XSCAN_OUTPUT_DIR` | `~/Documents/X资源收藏` | Markdown 输出目录 |
+| `XCOLAB_ALLOW_UNVERIFIED_CDP` | `0` | 无法验证 CDP 归属时是否显式允许继续 |
 
 例如：
 
@@ -54,7 +62,7 @@ Latest 搜索使用 X 的 `f=live` 筛选参数。
 XCOLAB_CDP_PORT=19542 \
 XCOLAB_CHROME_PROFILE="$HOME/.cola/chrome-debug-profile" \
 XSCAN_OUTPUT_DIR="$HOME/Documents/X资源收藏" \
-python3 scripts/xscan.py --mode feed
+.venv/bin/python scripts/xscan.py --mode feed
 ```
 
 ## 输出
@@ -74,10 +82,10 @@ python3 scripts/xscan.py --mode feed
 ## 故障排查
 
 - 找不到浏览器：安装 Chrome/Chromium，或设置 `XCOLAB_CHROME_PATH`
-- CDP 连接失败：检查 `XCOLAB_CDP_PORT` 是否被占用
+- CDP 连接失败：检查 `XCOLAB_CDP_PORT` 是否被占用，或端口是否属于其他浏览器
 - 未登录：在专用 Profile 中打开 `x.com` 并登录
 - 没有推文 DOM：检查网络、登录状态或 X 页面结构是否变化
-- 依赖错误：运行 `python3 -m pip install -r requirements.txt`
+- 依赖错误：使用运行扫描的同一个 Python，运行 `-m pip install -r requirements.txt`
 
 ## License
 

@@ -44,11 +44,27 @@ class FakeSession:
         self.closed = True
 
 
+class PartialSession(FakeSession):
+    def evaluate(self, expression, timeout=20):
+        if expression == "window.location.href":
+            return "https://x.com/search?q=Claude&src=typed_query&f=live"
+        return "not-json"
+
+
 class XScanTests(unittest.TestCase):
     def test_latest_search_uses_live_filter(self):
         url = xscan.search_url("Claude Code", latest=True)
         self.assertIn("f=live", url)
         self.assertNotIn("f=latest", url)
+
+    def test_english_stats_patterns_are_present(self):
+        self.assertIn("repl(?:y|ies)", xscan.EXTRACT_JS)
+        self.assertIn("repost(?:s)?", xscan.EXTRACT_JS)
+        self.assertIn("view(?:s)?", xscan.EXTRACT_JS)
+
+    def test_partial_extraction_is_a_failure(self):
+        with self.assertRaises(RuntimeError):
+            xscan.scan(PartialSession(), "search", query="Claude", rounds=1)
 
     def test_tweet_id_dedupes_photo_suffix(self):
         self.assertEqual(
