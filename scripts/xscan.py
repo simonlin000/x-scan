@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from datetime import datetime
 from pathlib import Path
 
@@ -33,7 +33,7 @@ except ImportError:
 # 配置
 # ============================================================
 
-def env_int(name, default, minimum=None):
+def env_int(name, default, minimum=None, maximum=None):
     """读取并校验整数环境变量，避免导入阶段出现难懂的 traceback。"""
     raw = os.environ.get(name, str(default))
     try:
@@ -42,10 +42,12 @@ def env_int(name, default, minimum=None):
         raise SystemExit(f"[错误] {name} 必须是整数，当前值为: {raw!r}")
     if minimum is not None and value < minimum:
         raise SystemExit(f"[错误] {name} 必须 >= {minimum}，当前值为: {value}")
+    if maximum is not None and value > maximum:
+        raise SystemExit(f"[错误] {name} 必须 <= {maximum}，当前值为: {value}")
     return value
 
 
-CDP_PORT = env_int("XCOLAB_CDP_PORT", 19542, minimum=1)
+CDP_PORT = env_int("XCOLAB_CDP_PORT", 19542, minimum=1, maximum=65535)
 CHROME_PROFILE = Path(os.environ.get(
     "XCOLAB_CHROME_PROFILE",
     str(Path.home() / ".cola" / "chrome-debug-profile"),
@@ -61,14 +63,18 @@ SCROLL_PAUSE = 2.0  # 每次滚动后等待秒数
 def find_chrome():
     """查找常见 Chrome/Chromium 安装位置，优先使用环境变量。"""
     configured = os.environ.get("XCOLAB_CHROME_PATH")
-    candidates = [configured] if configured else []
-    candidates.extend([
+    if configured:
+        return configured if Path(configured).is_file() else None
+    candidates = [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        os.path.join(os.environ.get("PROGRAMFILES", ""), "Google/Chrome/Application/chrome.exe"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google/Chrome/Application/chrome.exe"),
         shutil.which("google-chrome"),
         shutil.which("chromium"),
         shutil.which("chromium-browser"),
-    ])
+        shutil.which("chrome"),
+    ]
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
             return candidate
@@ -391,7 +397,7 @@ def post_key(post):
 def search_url(query, latest=False):
     """Build an X search URL. X uses `live` for the latest-results tab."""
     search_type = "live" if latest else "top"
-    encoded_q = urllib.request.quote(query)
+    encoded_q = quote(query)
     return f"https://x.com/search?q={encoded_q}&src=typed_query&f={search_type}"
 
 
@@ -505,14 +511,19 @@ def safe_display(value):
 
 def safe_tweet_url(value):
     parsed = urlparse(str(value or ""))
-    if parsed.scheme == "https" and parsed.netloc in {"x.com", "twitter.com", "www.x.com", "www.twitter.com"} and "/status/" in parsed.path:
-        return str(value).replace("\n", "")
+    allowed_hosts = {"x.com", "twitter.com", "www.x.com", "www.twitter.com"}
+    match = re.match(r"^/([^/]+)/status/(\d+)", parsed.path)
+    if parsed.scheme == "https" and parsed.netloc.lower() in allowed_hosts and match:
+        handle, status_id = match.groups()
+        if re.fullmatch(r"[A-Za-z0-9_]{1,30}", handle):
+            return f"https://x.com/{handle}/status/{status_id}"
     return ""
 
 
 def safe_media_url(value):
     parsed = urlparse(str(value or ""))
-    if parsed.scheme == "https" and (parsed.netloc == "pbs.twimg.com" or parsed.netloc.endswith(".pbs.twimg.com")):
+    host = parsed.netloc.lower()
+    if parsed.scheme == "https" and (host == "pbs.twimg.com" or host.endswith(".pbs.twimg.com")):
         return str(value).replace("\n", "")
     return ""
 
@@ -539,7 +550,8 @@ def generate_summary(posts, mode, query=None):
 
     lines = []
     if mode == "search":
-        lines.append(f"「{query}」搜索完成，共 {len(posts)} 条结果。")
+        clean_query = safe_text(query).replace("\n", " ")
+        lines.append(f"「{clean_query}」搜索完成，共 {len(posts)} 条结果。")
     else:
         lines.append(f"For You 扫描完成，筛出 {len(posts)} 条 AI 相关内容。")
 
@@ -547,13 +559,13 @@ def generate_summary(posts, mode, query=None):
     for i, p in enumerate(top, 1):
         handle = p.get("handle", "?")
         views = p.get("stats", {}).get("views", "?")
-        text_preview = safe_text(p.get("text", ""), 60).replace("\n", " ")
+        text_preview = markdown_body(p.get("text", ""))[:60].replace("\n", " ")
         lines.append(f"{i}. @{handle} ({views} 浏览): {text_preview}...")
 
     return "\n".join(lines)
 
 
-def save_results(posts, summary, mode, query, output_dir):
+def save_results(posts, summary, mode, query, output_dir, latest=False):
     """保存为 Markdown"""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -579,7 +591,7 @@ def save_results(posts, summary, mode, query, output_dir):
     if query:
         lines.append(f"query: {json.dumps(safe_text(query), ensure_ascii=False)}")
     lines.extend([
-        f"source: X {mode.title()} {'(Latest)' if mode == 'search' else ''}",
+        f"source: X {mode.title()} {'(Latest)' if latest else '(Top)'}" if mode == "search" else "source: X Feed",
         "tags: [x, AI, auto-scan]",
         "---",
         "",
@@ -602,6 +614,7 @@ def save_results(posts, summary, mode, query, output_dir):
         url = safe_tweet_url(p.get("tweetUrl", ""))
         quoted = markdown_body(p.get("quotedText", ""))
 
+        display = display.replace("(", "\\(").replace(")", "\\)")
         lines.append(f"### @{handle} ({display}) · {t}")
         lines.append("")
         lines.append(text)
@@ -680,8 +693,10 @@ def main():
 
     args = parser.parse_args()
 
-    if args.mode == "search" and not args.query:
-        parser.error("search 模式需要 --query 参数")
+    if args.mode == "search":
+        if not args.query or not args.query.strip():
+            parser.error("search 模式需要非空的 --query 参数")
+        args.query = args.query.strip()
     if args.rounds < 1:
         parser.error("--rounds 必须是大于等于 1 的整数")
     if args.latest and args.mode != "search":
@@ -747,7 +762,7 @@ def main():
 
     # 7. 保存
     if not args.summary_only:
-        filepath = save_results(filtered, summary, args.mode, args.query, args.output)
+        filepath = save_results(filtered, summary, args.mode, args.query, args.output, latest=args.latest)
         print(f"\n[完成] {len(filtered)} 条推文 → {filepath}")
     else:
         print(f"\n[完成] {len(filtered)} 条推文 (仅摘要模式)")

@@ -36,7 +36,8 @@ agent cannot install dependencies, report the exact command and the reason.
 ## Quick Reference
 
 ```bash
-SCRIPT=~/.cola/skills/x-scan/scripts/xscan.py
+# The installing Agent should replace this with the actual installed path.
+SCRIPT=/path/to/installed/x-scan/scripts/xscan.py
 
 # For You feed, five rounds, AI keyword filter
 python3 "$SCRIPT" --mode feed

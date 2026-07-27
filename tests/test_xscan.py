@@ -83,12 +83,18 @@ class XScanTests(unittest.TestCase):
             "tweetUrl": "https://x.com/example/status/123",
         }
         with tempfile.TemporaryDirectory() as tmp:
-            path = xscan.save_results([post], "summary", "search", 'a"b', tmp)
+            path = xscan.save_results([post], "summary", "search", 'a"b', tmp, latest=False)
             content = path.read_text(encoding="utf-8")
             self.assertIn('query: "a\\\"b"', content)
+            self.assertIn("source: X Search (Top)", content)
             self.assertIn("\\# heading", content)
             self.assertIn("https://pbs.twimg.com/media/a.jpg", content)
             self.assertNotIn("evil.example", content)
+            self.assertEqual(
+                xscan.safe_tweet_url("https://x.com/example/status/123/photo/1?x=1"),
+                "https://x.com/example/status/123",
+            )
+            self.assertEqual(xscan.safe_tweet_url("javascript:alert(1)"), "")
 
 
 if __name__ == "__main__":
