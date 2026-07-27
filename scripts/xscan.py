@@ -350,23 +350,35 @@ EXTRACT_JS = """
     const articles = document.querySelectorAll('article[data-testid="tweet"]');
     articles.forEach(article => {
         try {
-            // 作者信息
+            // 作者信息：优先读取 User-Name，避免头像链接抢在用户名链接前面。
             let handle = '';
             let displayName = '';
-            const userLinks = article.querySelectorAll('a[role="link"]');
+            const userName = article.querySelector('[data-testid="User-Name"]');
+            const userLinks = userName
+                ? userName.querySelectorAll('a[role="link"]')
+                : article.querySelectorAll('a[role="link"]');
             for (const a of userLinks) {
                 const href = a.getAttribute('href') || '';
-                if (href.match(/^\\/[^/]+$/) && !href.includes('/status/')) {
+                if (!href.match(/^\\/[^/]+$/) || href.includes('/status/')) continue;
+                const text = (a.innerText || '').trim();
+                const nameSpan = a.querySelector('span');
+                const label = (nameSpan ? nameSpan.innerText : text).trim();
+                if (label.startsWith('@')) {
                     handle = href.slice(1);
-                    const nameSpan = a.querySelector('span');
-                    if (nameSpan) displayName = nameSpan.innerText.trim();
-                    break;
+                } else if (!displayName && label) {
+                    displayName = label;
                 }
             }
+            if (!handle) {
+                const handleMatch = (userName?.innerText || '').match(/@([A-Za-z0-9_]{1,30})/);
+                if (handleMatch) handle = handleMatch[1];
+            }
 
-            // 时间
+            // 时间。推广卡片可能没有 time 节点，保留为空并单独标识推广。
             const timeEl = article.querySelector('time');
             const time = timeEl ? timeEl.getAttribute('datetime') || '' : '';
+            const promoted = Array.from(article.querySelectorAll('span'))
+                .some(span => (span.innerText || '').trim() === '广告');
 
             // 正文
             const textEl = article.querySelector('[data-testid="tweetText"]');
@@ -431,7 +443,7 @@ EXTRACT_JS = """
 
             if (text || quotedText) {
                 posts.push({
-                    handle, displayName, time, text, stats, media,
+                    handle, displayName, time, promoted, text, stats, media,
                     tweetUrl, quotedText
                 });
             }
@@ -713,6 +725,8 @@ def save_results(posts, summary, mode, query, output_dir, latest=False):
         handle = safe_handle(p.get("handle", "unknown"))
         display = safe_display(p.get("displayName", ""))
         t = safe_text(p.get("time", ""), 32)[:16].replace("T", " ")
+        if not t and p.get("promoted"):
+            t = "推广内容"
         text = markdown_body(p.get("text", ""))
         stats = p.get("stats", {})
         media = [safe_media_url(m) for m in p.get("media", [])]

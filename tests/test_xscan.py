@@ -89,6 +89,7 @@ class XScanTests(unittest.TestCase):
             "handle": "example",
             "displayName": "A\nName",
             "time": "2026-07-27T10:00:00.000Z",
+            "promoted": False,
             "text": "# heading\nnormal",
             "quotedText": "quoted",
             "stats": {"views": "10"},
