@@ -11,6 +11,7 @@
 - 提取作者、时间、正文、引用推文、互动数据、媒体和原文链接
 - Feed 模式按 AI 关键词过滤
 - 按稳定 Tweet ID 去重，`/status/123` 和 `/status/123/photo/1` 视为同一条
+- 热点速览会对正文近重复的推文做保守去重，优先保留高浏览量版本；完整推文仍全部写入 Markdown
 - 追加写入每日 Markdown 文件
 - 使用独立 Chrome Profile，不碰用户主 Chrome
 
@@ -70,7 +71,7 @@ XSCAN_OUTPUT_DIR="$HOME/Documents/X资源收藏" \
 - Feed：`auto-scan-YYYY-MM-DD.md`
 - Search：`search-{query}-YYYY-MM-DD.md`
 
-输出包含 YAML frontmatter、中文摘要和推文列表。查询词会安全写入 YAML，外部内容和媒体地址会进行基本 Markdown/URL 校验。
+输出包含 YAML frontmatter、中文摘要和推文列表。摘要默认最多展示 5 条，并会跳过正文近重复项；查询词会安全写入 YAML，外部内容和媒体地址会进行基本 Markdown/URL 校验。
 
 ## 安全边界
 

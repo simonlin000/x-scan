@@ -84,6 +84,26 @@ class XScanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             xscan.scan(session, "search", query="Claude", rounds=0)
 
+    def test_summary_selection_skips_near_duplicates_but_keeps_distinct_posts(self):
+        posts = [
+            {"handle": "high", "text": "AI agents automate research workflows today", "stats": {"views": "300"}},
+            {"handle": "copy", "text": "AI agents automate research workflows today!", "stats": {"views": "250"}},
+            {"handle": "different", "text": "A practical guide to local OCR for scanned books", "stats": {"views": "200"}},
+        ]
+        selected = xscan.select_summary_posts(posts, limit=3)
+        self.assertEqual([p["handle"] for p in selected], ["high", "different"])
+        self.assertEqual(len(posts), 3)
+
+    def test_summary_selection_does_not_remove_similar_tweets_from_saved_data(self):
+        posts = [
+            {"handle": "one", "text": "same topic", "stats": {"views": "100"}},
+            {"handle": "two", "text": "same topic", "stats": {"views": "90"}},
+        ]
+        summary = xscan.generate_summary(posts, "search", "AI")
+        self.assertIn("@one", summary)
+        self.assertNotIn("@two", summary)
+        self.assertEqual(len(posts), 2)
+
     def test_save_results_quotes_yaml_and_filters_media(self):
         post = {
             "handle": "example",

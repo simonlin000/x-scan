@@ -13,7 +13,9 @@ description: >
 
 Scan X/Twitter through a dedicated Chrome DevTools Protocol (CDP) browser. The
 skill keeps the user's main Chrome untouched and deduplicates by stable Tweet ID,
-so `/status/123` and `/status/123/photo/1` are treated as the same tweet.
+so `/status/123` and `/status/123/photo/1` are treated as the same tweet. The
+five-item Chinese hotspot summary also skips conservative near-duplicate bodies;
+all extracted tweets remain in the Markdown output.
 
 ## Agent Installation
 
@@ -89,7 +91,8 @@ CLI flags override the output directory. The scanner creates it when needed.
 4. Scrolls the requested number of rounds and extracts structured tweet data.
 5. Filters For You results by AI keywords when filtering is enabled.
 6. Deduplicates within the scan and against the day's output by Tweet ID.
-7. Prints a Chinese summary and writes Markdown unless `--summary-only` is set.
+7. Selects up to five high-view summary items while skipping near-duplicate text.
+8. Prints a Chinese summary and writes Markdown unless `--summary-only` is set.
 
 Each extracted tweet may include its handle, display name, timestamp, full text,
 quoted tweet text, views, likes, reposts, bookmarks, replies, media URLs, and
@@ -102,9 +105,10 @@ The scanner writes:
 - Feed: `auto-scan-YYYY-MM-DD.md`
 - Search: `search-{query}-YYYY-MM-DD.md`
 
-Output includes YAML frontmatter, a summary, and a tweet list. Query values are
-quoted safely and only HTTPS X/Twitter permalinks and HTTPS `pbs.twimg.com` media
-URLs are emitted.
+Output includes YAML frontmatter, a summary, and a tweet list. The summary can show
+up to five items and avoids conservative near-duplicate bodies, while the tweet list
+keeps all extracted results. Query values are quoted safely and only HTTPS
+X/Twitter permalinks and HTTPS `pbs.twimg.com` media URLs are emitted.
 
 ## Prerequisites
 

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import argparse
+import difflib
 import shutil
 import subprocess
 import sys
@@ -657,14 +658,57 @@ def markdown_body(value):
     return "\n".join(lines)
 
 
+def normalize_summary_text(value):
+    """Normalize text for conservative near-duplicate checks in the top summary."""
+    text = safe_text(value).lower()
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"[@#][\w一-龥_-]+", " ", text)
+    return re.sub(r"[^a-z0-9一-龥]+", "", text)
+
+
+def summary_text_similarity(left, right):
+    """Return a conservative similarity score for two tweet bodies."""
+    left = normalize_summary_text(left)
+    right = normalize_summary_text(right)
+    if not left or not right:
+        return 0.0
+    if left == right or left in right or right in left:
+        return 1.0
+    return difflib.SequenceMatcher(None, left, right).ratio()
+
+
+def select_summary_posts(posts, limit=5, similarity_threshold=0.86):
+    """Select high-view posts while avoiding near-duplicate summary entries.
+
+    This only changes the five-item summary; all scraped posts remain in the
+    saved Markdown output.
+    """
+    sorted_posts = sorted(
+        posts,
+        key=lambda p: parse_views(p.get("stats", {}).get("views", 0)),
+        reverse=True,
+    )
+    selected = []
+    for post in sorted_posts:
+        if any(
+            summary_text_similarity(post.get("text", ""), chosen.get("text", ""))
+            >= similarity_threshold
+            for chosen in selected
+        ):
+            continue
+        selected.append(post)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def generate_summary(posts, mode, query=None):
     """生成中文摘要"""
     if not posts:
         return "本轮扫描未发现新内容。"
 
-    # 按浏览量排序取 top
-    sorted_posts = sorted(posts, key=lambda p: parse_views(p.get("stats", {}).get("views", 0)), reverse=True)
-    top = sorted_posts[:5]
+    # 按浏览量排序，同时避免热点速览被近重复正文占满。
+    top = select_summary_posts(posts)
 
     lines = []
     if mode == "search":
